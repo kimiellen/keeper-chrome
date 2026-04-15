@@ -24,5 +24,5 @@
     "env.d.ts",
     ".wxt/wxt.d.ts"
   ],
-  "exclude": ["node_modules", "dist", "dist_firefox", ".output"]
+  "exclude": ["node_modules", "dist", "dist_chrome", ".output"]
 }

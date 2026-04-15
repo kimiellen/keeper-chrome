@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue';
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useAuthStore } from '../../stores/auth';
 import { useSettingsStore } from '../../stores/settings';
+import { useBookmarksStore } from '../../stores/bookmarks';
+import { useTagsStore } from '../../stores/tags';
+import { useRelationsStore } from '../../stores/relations';
 import type { Bookmark } from '../../api/types';
 
 import UnlockView from './views/Unlock.vue';
@@ -12,76 +15,82 @@ import SettingsView from './views/Settings.vue';
 type ViewName = 'unlock' | 'main' | 'edit' | 'settings';
 const authStore = useAuthStore();
 const settingsStore = useSettingsStore();
+const bookmarksStore = useBookmarksStore();
+const tagsStore = useTagsStore();
+const relationsStore = useRelationsStore();
 
 const currentView = ref<ViewName | null>(null);
 const editingBookmark = ref<Bookmark | null>(null);
+const isLoading = ref(true); // 添加加载状态
 
-let sessionCheckInterval: ReturnType<typeof setInterval> | null = null;
-let unlockTimestamp = 0;
-
-function startSessionCheck(): void {
-  stopSessionCheck();
-  unlockTimestamp = Date.now();
-  sessionCheckInterval = setInterval(async () => {
-    if (!authStore.locked) {
-      const elapsed = Date.now() - unlockTimestamp;
-      const timeoutMs = settingsStore.settings.sessionTimeout * 60 * 1000;
-      if (elapsed >= timeoutMs) {
-        await authStore.lock();
-      }
-    }
-  }, 60 * 1000);
-}
-
-function stopSessionCheck(): void {
-  if (sessionCheckInterval !== null) {
-    clearInterval(sessionCheckInterval);
-    sessionCheckInterval = null;
+function handleLockAndHide(message: { type: string }): void {
+  if (message.type === 'LOCK_AND_HIDE' && !authStore.locked) {
+    void authStore.lock();
   }
 }
 
 onMounted(async () => {
-  settingsStore.initTheme();
+  console.log('[Keeper:App] onMounted called');
+  isLoading.value = true;
+  
+  // 先初始化设置
+  await settingsStore.init();
+  settingsStore.applyTheme();
 
   try {
+    // 检查认证状态
     await authStore.checkStatus();
+    console.log('[Keeper:App] auth status:', authStore.locked ? 'locked' : 'unlocked');
+    
     if (!authStore.locked) {
       currentView.value = 'main';
-      startSessionCheck();
+      // 加载数据（书签、标签、关系）
+      console.log('[Keeper:App] loading data...');
+      await Promise.all([
+        bookmarksStore.fetchBookmarks(),
+        tagsStore.fetchTags(),
+        relationsStore.fetchRelations()
+      ]);
+      console.log('[Keeper:App] data loaded, bookmarks:', bookmarksStore.bookmarks.length);
     } else {
       currentView.value = 'unlock';
     }
-  } catch {
+  } catch (e) {
+    console.error('[Keeper:App] checkStatus error:', e);
     currentView.value = 'unlock';
+  } finally {
+    isLoading.value = false;
   }
+
+  browser.runtime.onMessage.addListener(handleLockAndHide);
 });
 
 onUnmounted(() => {
-  stopSessionCheck();
+  browser.runtime.onMessage.removeListener(handleLockAndHide);
 });
 
 watch(
   () => authStore.locked,
   (locked) => {
-    if (locked) {
+    if (locked && currentView.value !== 'unlock') {
       currentView.value = 'unlock';
-      stopSessionCheck();
     }
   }
 );
 
-watch(
-  () => settingsStore.settings.sessionTimeout,
-  () => {
-    if (!authStore.locked) {
-      startSessionCheck();
-    }
-  }
-);
+// 数据获取统一在视图切换回调中处理，不在 watch 中重复处理
+// 避免 onUnlocked/onEditSaved/onEditCancel/goBack 和 watch 的重复调用
 
-function onUnlocked() {
+async function onUnlocked() {
   currentView.value = 'main';
-  startSessionCheck();
+  // 等待 token 完全保存到 storage
+  await new Promise(resolve => setTimeout(resolve, 100));
+  // 解锁后获取数据
+  await Promise.all([
+    bookmarksStore.fetchBookmarks(),
+    tagsStore.fetchTags(),
+    relationsStore.fetchRelations()
+  ]);
 }
 
 function onEdit(bookmark: Bookmark | null) {
@@ -91,10 +100,22 @@ function onEdit(bookmark: Bookmark | null) {
 
 function onEditSaved() {
   currentView.value = 'main';
+  // 保存后刷新数据
+  void Promise.all([
+    bookmarksStore.fetchBookmarks(),
+    tagsStore.fetchTags(),
+    relationsStore.fetchRelations()
+  ]);
 }
 
 function onEditCancel() {
   currentView.value = 'main';
+  // 返回主页面时刷新数据
+  void Promise.all([
+    bookmarksStore.fetchBookmarks(),
+    tagsStore.fetchTags(),
+    relationsStore.fetchRelations()
+  ]);
 }
 
 function goSettings() {
@@ -103,30 +124,44 @@ function goSettings() {
 
 function goBack() {
   currentView.value = 'main';
+  // 返回主页面时刷新数据
+  void Promise.all([
+    bookmarksStore.fetchBookmarks(),
+    tagsStore.fetchTags(),
+    relationsStore.fetchRelations()
+  ]);
 }
 </script>
 
 <template>
   <div class="keeper-app">
-    <UnlockView
-      v-if="currentView === 'unlock'"
-      @unlocked="onUnlocked"
-    />
-    <MainView
-      v-else-if="currentView === 'main'"
-      @edit="onEdit"
-      @settings="goSettings"
-    />
-    <BookmarkEditView
-      v-else-if="currentView === 'edit'"
-      :bookmark="editingBookmark"
-      @saved="onEditSaved"
-      @cancel="onEditCancel"
-    />
-    <SettingsView
-      v-else-if="currentView === 'settings'"
-      @back="goBack"
-    />
+    <!-- 加载状态 - 覆盖层 -->
+    <div v-if="isLoading" class="loading-screen">
+      <div class="loading-spinner"></div>
+    </div>
+    
+    <!-- 视图 - 不使用 Transition，直接渲染 -->
+    <div v-show="!isLoading" class="views-wrapper">
+      <UnlockView
+        v-if="currentView === 'unlock'"
+        @unlocked="onUnlocked"
+      />
+      <MainView
+        v-else-if="currentView === 'main'"
+        @edit="onEdit"
+        @settings="goSettings"
+      />
+      <BookmarkEditView
+        v-else-if="currentView === 'edit'"
+        :bookmark="editingBookmark"
+        @saved="onEditSaved"
+        @cancel="onEditCancel"
+      />
+      <SettingsView
+        v-else-if="currentView === 'settings'"
+        @back="goBack"
+      />
+    </div>
   </div>
 </template>
 
@@ -188,6 +223,39 @@ body {
   flex-direction: column;
   height: 100vh;
   min-height: 520px;
+  background: var(--color-bg);
+  position: relative;
+}
+
+/* 加载屏幕 - 覆盖层 */
+.loading-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
+  z-index: 100;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 视图容器 - 确保背景色 */
+.views-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   background: var(--color-bg);
 }
 </style>

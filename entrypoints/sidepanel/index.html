@@ -3,8 +3,41 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="manifest.default_icon" content="{'16':'icons/toolbar-16.png','32':'icons/toolbar-32.png','48':'icons/toolbar-48.png'}" />
     <title>Keeper</title>
+    <style>
+      /* 写死背景色 #1c1b22 */
+      html, body, #app {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: #1A1A1A !important;
+      }
+      
+      /* Loading 占位 */
+      #app:empty::before {
+        content: '';
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        width: 32px;
+        height: 32px;
+        margin: -16px 0 0 -16px;
+        border: 3px solid rgba(255, 255, 255, 0.1);
+        border-top-color: #e74c3c;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @media (prefers-color-scheme: light) {
+        #app:empty::before {
+          border-color: rgba(0, 0, 0, 0.1);
+          border-top-color: #e74c3c;
+        }
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>

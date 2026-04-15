@@ -32,13 +32,6 @@ export const useRelationsStore = defineStore('relations', () => {
 
   /** 获取关联列表 */
   async function fetchRelations(): Promise<void> {
-    const authStore = useAuthStore();
-    
-    if (authStore.locked) {
-      error.value = '请先解锁';
-      return;
-    }
-
     loading.value = true;
     error.value = null;
 
@@ -49,6 +42,11 @@ export const useRelationsStore = defineStore('relations', () => {
     } catch (e) {
       if (e instanceof KeeperApiError) {
         error.value = e.detail;
+        // 401 时自动锁定
+        if (e.status === 401) {
+          const authStore = useAuthStore();
+          authStore.lock();
+        }
       } else {
         error.value = '获取关联列表失败';
       }

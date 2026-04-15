@@ -1,7 +1,20 @@
 export default defineContentScript({
   matches: ["<all_urls>"],
   runAt: "document_idle",
+  allFrames: true,
   main(ctx) {
+    const KEEPER_FILL_REQUEST = '__KEEPER_FILL_REQUEST__';
+
+    const onFrameMessage = (event: MessageEvent) => {
+      if (event.data && (event.data as Record<string, unknown>).type === KEEPER_FILL_REQUEST) {
+        void handleFillFromShortcut();
+      }
+    };
+    window.addEventListener('message', onFrameMessage);
+    ctx.onInvalidated(() => {
+      window.removeEventListener('message', onFrameMessage);
+    });
+
     interface MatchingAccount {
       id: number;
       username: string;
@@ -20,11 +33,6 @@ export default defineContentScript({
 
     interface MatchingBookmarksResponse {
       bookmarks: MatchingBookmark[];
-    }
-
-    interface GeneratedPasswordMessage {
-      type: "FILL_GENERATED_PASSWORD";
-      password: string;
     }
 
     interface AccountChoice {
@@ -114,13 +122,18 @@ export default defineContentScript({
         return false;
       }
 
-      if (input.offsetParent === null && style.position !== "fixed") {
-        return false;
-      }
-
+      // 检查元素是否有实际尺寸
       const rect = input.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) {
         return false;
+      }
+
+      // 检查元素是否在布局中
+      if (input.offsetParent === null) {
+        const position = style.position;
+        if (position !== "fixed" && position !== "absolute" && position !== "sticky") {
+          return false;
+        }
       }
 
       return true;
@@ -180,10 +193,21 @@ export default defineContentScript({
       const selector = [
         'input[type="email"]',
         'input[type="text"]',
+        'input[type="tel"]',
         'input[name*="user" i]',
         'input[name*="email" i]',
         'input[name*="login" i]',
+        'input[name*="account" i]',
+        'input[id*="user" i]',
+        'input[id*="email" i]',
+        'input[id*="account" i]',
         'input[autocomplete="username"]',
+        'input[autocomplete="email"]',
+        // 华为特定选择器
+        'input.userAccount',
+        'input[placeholder*="手机" i]',
+        'input[placeholder*="账号" i]',
+        'input[placeholder*="邮件" i]',
       ].join(",");
 
       const candidates = Array.from(scope.querySelectorAll<HTMLInputElement>(selector));
@@ -218,7 +242,8 @@ export default defineContentScript({
       }
 
       let ancestor: HTMLElement | null = passwordField.parentElement;
-      while (ancestor) {
+      let depth = 0;
+      while (ancestor && depth < 10) {
         const scopedCandidates = findUsernameCandidates(ancestor, passwordField);
         if (scopedCandidates.length > 0) {
           const selectedInAncestor = chooseBestUsernameCandidate(passwordField, scopedCandidates);
@@ -227,6 +252,7 @@ export default defineContentScript({
           }
         }
         ancestor = ancestor.parentElement;
+        depth++;
       }
 
       const globalCandidates = findUsernameCandidates(document, passwordField);
@@ -308,10 +334,22 @@ export default defineContentScript({
     function getVisibleUsernameOnlyFields(): HTMLInputElement[] {
       const selector = [
         'input[type="email"]',
-        'input[autocomplete="username"]',
+        'input[type="text"]',
+        'input[type="tel"]',
         'input[name*="user" i]',
         'input[name*="email" i]',
         'input[name*="login" i]',
+        'input[name*="account" i]',
+        'input[id*="user" i]',
+        'input[id*="email" i]',
+        'input[id*="account" i]',
+        'input[autocomplete="username"]',
+        'input[autocomplete="email"]',
+        // 华为特定选择器
+        'input.userAccount',
+        'input[placeholder*="手机" i]',
+        'input[placeholder*="账号" i]',
+        'input[placeholder*="邮件" i]',
       ].join(",");
 
       return Array.from(document.querySelectorAll<HTMLInputElement>(selector)).filter(
@@ -383,33 +421,87 @@ export default defineContentScript({
       isTwoStep: boolean = false,
     ): Promise<void> {
       const username = choice.account.username ?? "";
-      const password = choice.account.password ?? "";
+      
+      // 按需解密密码
+      let password = "";
+      try {
+        const response = await browser.runtime.sendMessage({
+          type: 'GET_DECRYPTED_PASSWORD',
+          payload: {
+            bookmarkId: choice.bookmarkId,
+            accountId: choice.account.id,
+          },
+        }) as { password?: string; error?: string; locked?: boolean };
+        
+        if (response.locked) {
+          showNotification('请先解锁 Keeper');
+          return;
+        }
+        if (response.error) {
+          console.error('[Keeper:content] Failed to decrypt password:', response.error);
+          showNotification('解密密码失败');
+          return;
+        }
+        password = response.password ?? "";
+      } catch (error) {
+        console.error('[Keeper:content] Error requesting decrypted password:', error);
+        showNotification('获取密码失败');
+        return;
+      }
 
       if (isTwoStep) {
         if (username) {
           setFieldValue(anchorField, username);
           await delay(FILL_ANIMATION_DURATION + 100);
 
-          const submitBtn = findSubmitButton(anchorField);
-          if (submitBtn) {
-            submitBtn.click();
-            const passwordField = await waitForPasswordField(5000);
-            if (passwordField && password) {
+          // 先尝试在当前页面直接查找密码框（单页同时显示用户名密码的场景）
+          if (password) {
+            const existingPasswordField = getVisiblePasswordFields()[0] ?? null;
+            if (existingPasswordField) {
               await delay(200);
-              setFieldValue(passwordField, password);
+              setFieldValue(existingPasswordField, password);
+            } else {
+              // 当前页面没有密码框，才是真正的分步登录，点击提交等待下一步
+              const submitBtn = findSubmitButton(anchorField);
+              if (submitBtn) {
+                submitBtn.click();
+                const passwordField = await waitForPasswordField(5000);
+                if (passwordField) {
+                  await delay(200);
+                  setFieldValue(passwordField, password);
+                }
+              }
             }
           }
         }
       } else {
-        const usernameField = findUsernameField(anchorField);
-        if (usernameField && username) {
-          setFieldValue(usernameField, username);
+        // 非 two-step 模式：同时有用户名和密码字段
+        const anchorType = anchorField.type.toLowerCase();
+        
+        if (anchorType === 'password') {
+          // anchor 是密码字段，查找用户名字段
+          const usernameField = findUsernameField(anchorField);
+          if (usernameField && username) {
+            setFieldValue(usernameField, username);
+            if (password) {
+              await delay(FILL_ANIMATION_DURATION + 100);
+            }
+          }
+          if (password) {
+            setFieldValue(anchorField, password);
+          }
+        } else {
+          // anchor 是用户名字段（text/email/tel），直接使用它
+          if (username) {
+            setFieldValue(anchorField, username);
+          }
           if (password) {
             await delay(FILL_ANIMATION_DURATION + 100);
+            const passwordField = getVisiblePasswordFields()[0];
+            if (passwordField) {
+              setFieldValue(passwordField, password);
+            }
           }
-        }
-        if (password) {
-          setFieldValue(anchorField, password);
         }
       }
 
@@ -576,20 +668,45 @@ export default defineContentScript({
      * 处理快捷键触发的账号填充。
      */
     async function handleFillFromShortcut(): Promise<void> {
-      const passwordFields = getVisiblePasswordFields();
-
       let anchorField: HTMLInputElement | null = null;
       let isTwoStep = false;
 
-      if (passwordFields.length > 0) {
-        anchorField = passwordFields[0];
-      } else {
-        const usernameFields = getVisibleUsernameOnlyFields();
-        if (usernameFields.length === 0) {
-          return;
+      // 1. 优先使用当前聚焦元素（用户按 Alt+P 时通常已聚焦输入框）
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLInputElement && activeElement.type !== 'hidden') {
+        const activeType = activeElement.type.toLowerCase();
+        if (activeType === 'password') {
+          anchorField = activeElement;
+        } else if (['email', 'text', 'tel'].includes(activeType) && !isInSearchContext(activeElement)) {
+          anchorField = activeElement;
+          // 只有在当前页面没有密码字段时才认为是分步登录
+          const hasPasswordField = getVisiblePasswordFields().length > 0;
+          isTwoStep = !hasPasswordField;
         }
-        anchorField = usernameFields[0];
-        isTwoStep = true;
+      }
+
+      // 2. 没有聚焦元素时，回退到 DOM 扫描
+      if (!anchorField) {
+        const passwordFields = getVisiblePasswordFields();
+        if (passwordFields.length > 0) {
+          anchorField = passwordFields[0];
+        } else {
+          const usernameFields = getVisibleUsernameOnlyFields();
+          if (usernameFields.length === 0) {
+            if (window.top === window && window.frames.length > 0) {
+              for (let i = 0; i < window.frames.length; i++) {
+                try {
+                  window.frames[i]?.postMessage({ type: KEEPER_FILL_REQUEST }, '*');
+                } catch {
+                  // 跨域 iframe 会抛出安全错误，忽略即可
+                }
+              }
+            }
+            return;
+          }
+          anchorField = usernameFields[0];
+          isTwoStep = true;
+        }
       }
 
       const bookmarks = await getMatchingBookmarks();
@@ -620,7 +737,7 @@ export default defineContentScript({
       showAccountDropdown(anchorField, choices, isTwoStep);
     }
 
-    const onRuntimeMessage = (message: unknown) => {
+    const onRuntimeMessage = async (message: unknown) => {
       if (!message || typeof message !== "object") {
         return;
       }
@@ -628,28 +745,10 @@ export default defineContentScript({
       const msg = message as Record<string, unknown>;
 
       if (msg.type === "FILL_FROM_SHORTCUT") {
-        void handleFillFromShortcut();
+        await handleFillFromShortcut();
         return;
       }
 
-      const payload = message as Partial<GeneratedPasswordMessage>;
-      if (payload.type !== "FILL_GENERATED_PASSWORD" || typeof payload.password !== "string") {
-        return;
-      }
-
-      const activeElement = document.activeElement;
-      const targetField =
-        activeElement instanceof HTMLInputElement &&
-        activeElement.type.toLowerCase() === "password" &&
-        isVisibleInput(activeElement)
-          ? activeElement
-          : getVisiblePasswordFields()[0] ?? null;
-
-      if (!targetField) {
-        return;
-      }
-
-      setFieldValue(targetField, payload.password);
     };
 
     browser.runtime.onMessage.addListener(onRuntimeMessage);

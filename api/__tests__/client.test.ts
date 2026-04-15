@@ -8,7 +8,7 @@ import { KeeperClient } from '../client';
 
 // 创建测试客户端（指向本地开发服务器）
 const client = new KeeperClient({
-  baseUrl: 'https://127.0.0.1:8443/api',
+  baseUrl: 'http://127.0.0.1:51000/api',
   timeout: 10000,
   retries: 2,
 });
@@ -91,7 +91,7 @@ async function runTests() {
   console.log(`==============================`);
 
   if (failed > 0) {
-    console.log('\n⚠️ Some tests failed. Make sure the backend server is running at https://127.0.0.1:8443');
+    console.log('\n⚠️ Some tests failed. Make sure the backend server is running at http://127.0.0.1:51000');
   } else {
     console.log('\n✅ All tests passed!');
   }

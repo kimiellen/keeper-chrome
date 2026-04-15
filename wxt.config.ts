@@ -7,42 +7,38 @@ export default defineConfig({
   }),
   manifest: {
     name: 'Keeper',
-    version: '1.0.0',
+    version: '0.26.4',
     description: '密码管理器',
     permissions: [
       'storage',
       'activeTab',
-      'contextMenus',
       'tabs',
+      'notifications',
       'sidePanel',
-    ],
-    host_permissions: [
-      '<all_urls>'
+      '<all_urls>',
     ],
     icons: {
       '32': 'icons/icon-32.png',
       '64': 'icons/icon-64.png',
-      '128': 'icons/icon-128.png'
+      '128': 'icons/icon-128.png',
     },
     side_panel: {
       default_path: 'sidepanel.html',
     },
-    action: {
-      default_title: 'Keeper',
-      default_icon: {
-        '16': 'icons/toolbar-16.png',
-        '32': 'icons/toolbar-32.png',
-        '48': 'icons/toolbar-48.png'
-      }
-    },
     commands: {
+      toggle_sidebar: {
+        suggested_key: {
+          default: 'Alt+Period',
+        },
+        description: '切换 Keeper 侧边栏',
+      },
       fill_credentials: {
         suggested_key: {
-          default: 'Alt+P'
+          default: 'Alt+P',
         },
-        description: '填充账号密码'
-      }
-    }
+        description: '填充账号密码',
+      },
+    },
   },
-  browser: 'chrome'
+  browser: 'chrome',
 });

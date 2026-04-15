@@ -14,7 +14,7 @@ export const useAuthStore = defineStore('auth', () => {
   const locked = ref(true);
   const loading = ref(false);
   const error = ref<string | null>(null);
-  const sessionExpiresAt = ref<string | null>(null);
+
   const isInitialized = ref(false);
   
   // === Getters ===
@@ -51,21 +51,20 @@ export const useAuthStore = defineStore('auth', () => {
     loading.value = true;
     error.value = null;
     
+    // 加载已保存的 token
+    await keeperClient.loadToken();
+    
     try {
       const status = await keeperClient.getStatus();
       
       if ('locked' in status && status.locked) {
         locked.value = true;
-        sessionExpiresAt.value = null;
+
       } else {
         locked.value = false;
-        sessionExpiresAt.value = 'sessionExpiresAt' in status 
-          ? status.sessionExpiresAt 
-          : null;
       }
     } catch (e) {
       locked.value = true;
-      sessionExpiresAt.value = null;
     } finally {
       loading.value = false;
     }
@@ -91,15 +90,33 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  // 防止重复解锁的标记
+  let isUnlocking = false;
+
   /** 解锁（登录），直接发送明文密码给后端 */
   async function unlock(password: string): Promise<void> {
+    // 防止重复调用
+    if (isUnlocking) {
+      console.log('[Keeper:Auth] Unlock already in progress, skipping');
+      return;
+    }
+    
+    isUnlocking = true;
     loading.value = true;
     error.value = null;
     
     try {
-      await keeperClient.unlock({ password });
+      console.log('[Keeper:Auth] Unlocking...');
+      const response = await keeperClient.unlock({ password });
+      console.log('[Keeper:Auth] Unlock response:', response);
+      // 保存 token 到客户端
+      if (response.token) {
+        console.log('[Keeper:Auth] Saving token:', response.token.substring(0, 10) + '...');
+        await keeperClient.setToken(response.token);
+      } else {
+        console.log('[Keeper:Auth] No token in response!');
+      }
       locked.value = false;
-      sessionExpiresAt.value = null;
     } catch (e) {
       if (e instanceof KeeperApiError) {
         error.value = e.detail;
@@ -109,6 +126,7 @@ export const useAuthStore = defineStore('auth', () => {
       throw e;
     } finally {
       loading.value = false;
+      isUnlocking = false;
     }
   }
 
@@ -121,8 +139,9 @@ export const useAuthStore = defineStore('auth', () => {
       await keeperClient.lock();
     } finally {
       locked.value = true;
-      sessionExpiresAt.value = null;
       loading.value = false;
+      // 清除 token
+      await keeperClient.setToken(null);
     }
   }
 
@@ -136,7 +155,6 @@ export const useAuthStore = defineStore('auth', () => {
     locked.value = true;
     loading.value = false;
     error.value = null;
-    sessionExpiresAt.value = null;
   }
 
   return {
@@ -144,7 +162,6 @@ export const useAuthStore = defineStore('auth', () => {
     locked,
     loading,
     error,
-    sessionExpiresAt,
     isInitialized,
     
     // Getters

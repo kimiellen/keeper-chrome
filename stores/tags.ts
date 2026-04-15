@@ -32,13 +32,6 @@ export const useTagsStore = defineStore('tags', () => {
 
   /** 获取标签列表 */
   async function fetchTags(): Promise<void> {
-    const authStore = useAuthStore();
-    
-    if (authStore.locked) {
-      error.value = '请先解锁';
-      return;
-    }
-
     loading.value = true;
     error.value = null;
 
@@ -49,6 +42,11 @@ export const useTagsStore = defineStore('tags', () => {
     } catch (e) {
       if (e instanceof KeeperApiError) {
         error.value = e.detail;
+        // 401 时自动锁定
+        if (e.status === 401) {
+          const authStore = useAuthStore();
+          authStore.lock();
+        }
       } else {
         error.value = '获取标签列表失败';
       }

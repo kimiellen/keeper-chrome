@@ -52,11 +52,11 @@ export interface AuthInfoResponse {
 
 export interface UnlockResponse {
   message: string;
+  token?: string;
 }
 
 export interface StatusResponseUnlocked {
   locked: false;
-  sessionExpiresAt: string;
 }
 
 export interface StatusResponseLocked {
@@ -85,6 +85,7 @@ export interface Bookmark {
   id: string;
   name: string;
   pinyinInitials: string;
+  pinyinFull: string;
   tagIds: number[];
   urls: UrlItem[];
   notes: string;
@@ -126,9 +127,10 @@ export interface BookmarkListParams {
   limit?: number;
   offset?: number;
   sort?: string;
+  /** 标签ID列表，逗号分隔，如 "1,2,3" */
   tagIds?: string;
+  /** 搜索关键词（匹配 name, pinyinInitials, pinyinFull） */
   search?: string;
-  [key: string]: string | number | boolean | undefined;
 }
 
 export type BookmarkListResponse = PaginatedResponse<Bookmark>;
@@ -165,7 +167,6 @@ export interface TagUpdate extends TagCreate {}
 
 export interface TagListParams {
   sort?: string;
-  [key: string]: string | number | boolean | undefined;
 }
 
 export type TagListResponse = PaginatedResponse<Tag>;
@@ -219,6 +220,10 @@ export interface StatsResponse {
 
 // ============ 导入导出 ============
 
+export interface ExportRequest {
+  password: string;  // 主密码认证
+}
+
 export interface ExportResponse {
   version: string;
   exportedAt: string;
@@ -228,6 +233,7 @@ export interface ExportResponse {
 }
 
 export interface ImportRequest {
+  password: string;  // 主密码认证
   format: 'keeper_json' | 'bitwarden_json' | 'csv';
   content: string;
   conflictPolicy: 'skip' | 'rename' | 'overwrite';
@@ -239,16 +245,10 @@ export interface ImportCounts {
   relations: number;
 }
 
-export interface ImportSkipped {
-  bookmarks: number;
-  reason: string;
-}
-
 export interface ImportResponse {
-  message: string;
+  success: boolean;
   imported: ImportCounts;
-  skipped: ImportSkipped;
-  warnings: string[];
+  errors: string[];
 }
 
 export interface ImportConflict {
@@ -308,4 +308,13 @@ export interface DatabaseCreateResponse {
 
 export interface DatabaseRemoveRequest {
   path: string;
+}
+
+export interface DatabaseAddRequest {
+  path: string;
+}
+
+export interface DatabaseAddResponse {
+  message: string;
+  name: string;
 }

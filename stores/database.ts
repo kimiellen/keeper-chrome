@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { keeperClient, KeeperApiError, KeeperClient } from '../api';
+import { keeperClient, KeeperApiError } from '../api';
 import type { DatabaseInfo } from '../api/types';
 
 export const useDatabaseStore = defineStore('database', () => {
@@ -24,8 +24,8 @@ export const useDatabaseStore = defineStore('database', () => {
       const response = await keeperClient.listDatabases();
       databases.value = response.databases;
       currentPath.value = response.current;
-    } catch (e: unknown) {
-      error.value = KeeperClient.getFriendlyErrorMessage(e);
+    } catch (e: any) {
+      error.value = e instanceof KeeperApiError ? e.detail : e.message;
       console.error('Failed to fetch database list:', e);
     } finally {
       loading.value = false;
@@ -37,10 +37,10 @@ export const useDatabaseStore = defineStore('database', () => {
     error.value = null;
     try {
       await keeperClient.openDatabase({ path });
-      await fetchList();
+      await fetchList(); // Refresh the list and current db
       return true;
-    } catch (e: unknown) {
-      error.value = KeeperClient.getFriendlyErrorMessage(e);
+    } catch (e: any) {
+      error.value = e instanceof KeeperApiError ? e.detail : e.message;
       return false;
     } finally {
       loading.value = false;
@@ -54,8 +54,8 @@ export const useDatabaseStore = defineStore('database', () => {
       await keeperClient.createDatabase({ path, email, password });
       await fetchList();
       return true;
-    } catch (e: unknown) {
-      error.value = KeeperClient.getFriendlyErrorMessage(e);
+    } catch (e: any) {
+      error.value = e instanceof KeeperApiError ? e.detail : e.message;
       return false;
     } finally {
       loading.value = false;
@@ -68,9 +68,24 @@ export const useDatabaseStore = defineStore('database', () => {
       await keeperClient.removeDatabase({ path });
       await fetchList();
       return true;
-    } catch (e: unknown) {
-      error.value = KeeperClient.getFriendlyErrorMessage(e);
+    } catch (e: any) {
+      error.value = e instanceof KeeperApiError ? e.detail : e.message;
       return false;
+    }
+  }
+
+  async function addDatabase(path: string) {
+    loading.value = true;
+    error.value = null;
+    try {
+      await keeperClient.addDatabase({ path });
+      await fetchList(); // 刷新列表
+      return true;
+    } catch (e: any) {
+      error.value = e instanceof KeeperApiError ? e.detail : e.message;
+      return false;
+    } finally {
+      loading.value = false;
     }
   }
 
@@ -78,5 +93,5 @@ export const useDatabaseStore = defineStore('database', () => {
     error.value = null;
   }
 
-  return { databases, currentPath, loading, error, currentDatabase, currentName, fetchList, openDatabase, createDatabase, removeDatabase, clearError };
+  return { databases, currentPath, loading, error, currentDatabase, currentName, fetchList, openDatabase, createDatabase, removeDatabase, addDatabase, clearError };
 });

@@ -4,6 +4,7 @@ import { useBookmarksStore } from '../../../stores/bookmarks';
 import { useTagsStore } from '../../../stores/tags';
 import { useRelationsStore } from '../../../stores/relations';
 import { useSettingsStore } from '../../../stores/settings';
+import { keeperClient } from '../../../api';
 import type { Bookmark } from '../../../api/types';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Back, Close, Plus, Delete } from '@element-plus/icons-vue';
@@ -65,13 +66,20 @@ onMounted(async () => {
     urls.value = props.bookmark.urls?.length ? [...props.bookmark.urls] : [{ url: '' }];
 
     if (props.bookmark.accounts?.length) {
-      accounts.value = props.bookmark.accounts.map(a => ({
-        username: a.username,
-        password: a.password,
-      }));
+      // 编辑模式：按需解密密码
+      try {
+        const decryptedBookmark = await keeperClient.getBookmark(props.bookmark.id, true);
+        accounts.value = decryptedBookmark.accounts.map(a => ({
+          username: a.username,
+          password: a.password,
+        }));
 
-      if (props.bookmark.accounts[0].relatedIds) {
-        selectedRelations.value = [...props.bookmark.accounts[0].relatedIds];
+        if (decryptedBookmark.accounts[0]?.relatedIds) {
+          selectedRelations.value = [...decryptedBookmark.accounts[0].relatedIds];
+        }
+      } catch (error) {
+        ElMessage.error('获取密码失败');
+        accounts.value = [{ username: '', password: '' }];
       }
     } else {
       accounts.value = [{ username: '', password: '' }];

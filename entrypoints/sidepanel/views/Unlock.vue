@@ -2,6 +2,8 @@
 import { ref, onMounted, nextTick } from 'vue';
 import { useAuthStore } from '../../../stores/auth';
 import { useDatabaseStore } from '../../../stores/database';
+import { useSettingsStore } from '../../../stores/settings';
+import { keeperClient } from '../../../api';
 import { Check, Close, Folder, Plus } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 
@@ -37,7 +39,7 @@ onMounted(async () => {
   if (savedTab === 'password' || savedTab === 'fingerprint') {
     activeTab.value = savedTab;
   }
-  nextTick(() => passwordInput.value?.focus());
+  // 点击侧边栏空白处聚焦密码输入框
   window.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
     if (target.closest('input, button, a, [role="button"], [tabindex], .el-input, .el-button, .el-select, .el-dialog, .db-selector-container')) {
@@ -47,6 +49,7 @@ onMounted(async () => {
       passwordInput.value?.focus();
     }
   });
+
 });
 
 // Tab 切换
@@ -72,13 +75,17 @@ async function handleUnlock() {
 
   try {
     await authStore.unlock(password.value);
-    const success = !authStore.locked;
-    if (success) {
-      emit('unlocked');
-    } else {
-      error.value = '密码错误';
+    // 解锁成功后，同步会话超时设置到后端
+    const settingsStore = useSettingsStore();
+    try {
+      await keeperClient.setSessionTimeout(settingsStore.settings.sessionTimeout);
+    } catch (syncErr) {
+      console.warn('Failed to sync session timeout to backend:', syncErr);
     }
+    // 解锁成功，触发 unlocked 事件
+    emit('unlocked');
   } catch (e: any) {
+    // 只有在真正失败时才显示错误
     if (authStore.error) {
       error.value = authStore.error;
     } else if (e?.detail) {
@@ -128,14 +135,14 @@ function handleOpenDbClick() {
 
 async function submitOpenDb() {
   if (!dbPathInput.value) return;
-  const success = await databaseStore.openDatabase(dbPathInput.value);
+  const success = await databaseStore.addDatabase(dbPathInput.value);
   if (success) {
-    authStore.reset();
     isSelectorOpen.value = false;
     showOpenDbInput.value = false;
-    ElMessage.success('数据库已打开');
+    dbPathInput.value = '';
+    ElMessage.success('数据库已添加到列表');
   } else {
-    ElMessage.error(databaseStore.error || '打开失败');
+    ElMessage.error(databaseStore.error || '添加失败');
   }
 }
 
@@ -233,10 +240,9 @@ function handleFingerprint() {
             placeholder="请输入主密码"
             size="large"
             show-password
-            @keyup.enter="handleUnlock"
           />
 
-          <div v-if="error" class="error-message" style="white-space: pre-line">
+          <div v-if="error" class="error-message">
             {{ error }}
           </div>
 

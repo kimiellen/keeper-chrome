@@ -22,8 +22,8 @@ export default defineContentScript({
 
     const KEEPER_FILLED_ATTR = 'data-keeper-filled';
 
-    /** 凭据检查结果：不存在 / 已存在且密码相同 / 已存在但密码不同 */
-    type CredentialCheckResult = 'not_found' | 'same_password' | 'different_password';
+    /** 凭据检查结果：不存在 / 已存在且密码相同 / 已存在但密码不同 / 未登录 */
+    type CredentialCheckResult = 'not_found' | 'same_password' | 'different_password' | 'not_authenticated';
 
     const capturedSessionKeys = new Set<string>();
     const observedForms = new WeakSet<HTMLFormElement>();
@@ -322,7 +322,7 @@ export default defineContentScript({
       host: HTMLDivElement,
       cleanupRef: { timer: number | null },
     ): void => {
-      bar.style.transform = 'translateY(-100%)';
+      bar.style.transform = 'translateY(-120%)';
       bar.style.opacity = '0';
 
       cleanupRef.timer = window.setTimeout(() => {
@@ -344,17 +344,20 @@ export default defineContentScript({
         return;
       }
 
+      // 如果已有通知栏，先关闭
       if (dismissActiveBar) {
         dismissActiveBar();
       }
 
       const host = document.createElement('div');
       host.style.position = 'fixed';
-      host.style.top = '0';
+      host.style.top = '12px';
       host.style.left = '0';
       host.style.width = '100%';
       host.style.zIndex = '2147483647';
       host.style.pointerEvents = 'none';
+      host.style.display = 'flex';
+      host.style.justifyContent = 'center';
 
       const shadowRoot = host.attachShadow({ mode: 'open' });
 
@@ -366,7 +369,9 @@ export default defineContentScript({
 
         .keeper-bar {
           box-sizing: border-box;
-          width: 100%;
+          width: auto;
+          min-width: 320px;
+          max-width: 480px;
           pointer-events: auto;
           color: #ffffff;
           font-size: 14px;
@@ -376,15 +381,13 @@ export default defineContentScript({
           align-items: center;
           justify-content: space-between;
           gap: 12px;
-          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-          transform: translateY(-100%);
+          background: #1a1f2e;
+          border: 2px solid #3b82f6;
+          border-radius: 8px;
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+          transform: translateY(-120%);
           opacity: 0;
           transition: transform 300ms ease, opacity 300ms ease;
-          ${
-            isUpdate
-              ? 'background: #f59e0b;'
-              : 'background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);'
-          }
         }
 
         .keeper-message {
@@ -417,8 +420,8 @@ export default defineContentScript({
 
         .keeper-btn {
           border-radius: 6px;
-          border: 1px solid rgba(255, 255, 255, 0.55);
-          padding: 6px 12px;
+          border: none;
+          padding: 8px 16px;
           font-size: 13px;
           font-weight: 600;
           cursor: pointer;
@@ -426,19 +429,19 @@ export default defineContentScript({
         }
 
         .keeper-btn:hover {
-          opacity: 0.92;
+          opacity: 0.9;
           transform: translateY(-1px);
         }
 
         .keeper-save {
-          background: #ffffff;
-          color: #0f9d58;
-          border-color: #ffffff;
+          background: #3b82f6;
+          color: #ffffff;
         }
 
         .keeper-ignore {
           background: transparent;
-          color: #ffffff;
+          color: #3b82f6;
+          border: 1px solid #3b82f6;
         }
 
         @media (max-width: 640px) {
@@ -498,7 +501,7 @@ export default defineContentScript({
 
       const cleanupState: { timer: number | null } = { timer: null };
 
-      const dismiss = (): void => {
+      const dismiss = async (): Promise<void> => {
         if (!activeBarHost) {
           return;
         }
@@ -514,6 +517,8 @@ export default defineContentScript({
         removeBarWithAnimation(bar, host, cleanupState);
         activeBarHost = null;
         dismissActiveBar = null;
+
+
       };
 
       const onSave = async (): Promise<void> => {
@@ -526,20 +531,26 @@ export default defineContentScript({
               password,
             },
           });
+          // 清除待处理状态
+          await browser.runtime.sendMessage({
+            type: 'CLEAR_PENDING_CREDENTIAL',
+          });
         } catch {
           // 忽略保存阶段错误，避免阻断页面交互。
         }
-        dismiss();
+        await dismiss();
       };
 
-      const onIgnore = (): void => {
-        dismiss();
+      const onIgnore = async (): Promise<void> => {
+        await dismiss();
       };
 
       saveButton.addEventListener('click', () => {
         void onSave();
       });
-      ignoreButton.addEventListener('click', onIgnore);
+      ignoreButton.addEventListener('click', () => {
+        void onIgnore();
+      });
 
       dismissActiveBar = dismiss;
 
@@ -548,9 +559,7 @@ export default defineContentScript({
         bar.style.opacity = '1';
       });
 
-      cleanupState.timer = window.setTimeout(() => {
-        dismiss();
-      }, 15000);
+      // 注意：不设置自动关闭定时器，只有用户点击保存/忽略后才关闭
     };
 
     const checkCredentialStatus = async (
@@ -563,7 +572,12 @@ export default defineContentScript({
           payload: {
             url: window.location.href,
           },
-        })) as { bookmarks?: BookmarkItem[] };
+        })) as { bookmarks?: BookmarkItem[]; error?: string; locked?: boolean };
+
+        // 检查是否未登录
+        if (response?.error === 'Unauthorized' || response?.locked) {
+          return 'not_authenticated';
+        }
 
         const bookmarks = Array.isArray(response?.bookmarks) ? response.bookmarks : [];
         const normalizedUsername = username.toLowerCase();
@@ -578,17 +592,59 @@ export default defineContentScript({
           }
         }
       } catch {
-        // 查询失败时默认当作新凭据处理
+        // 查询失败时默认当作未登录处理，静默忽略
+        return 'not_authenticated';
       }
 
       return 'not_found';
     };
 
     /**
+     * 检查设置是否开启登录捕获
+     */
+    const isLoginCaptureEnabled = async (): Promise<boolean> => {
+      try {
+        const result = await browser.storage.local.get('keeper_settings');
+        const settings = result.keeper_settings || {};
+        return settings.enableLoginCapture !== false; // 默认为开启
+      } catch {
+        return true;
+      }
+    };
+
+    /**
+     * 保存待处理凭据到后台
+     */
+    const savePendingToBackground = async (
+      username: string,
+      password: string,
+    ): Promise<void> => {
+      const hostname = new URL(window.location.href).hostname;
+      try {
+        await browser.runtime.sendMessage({
+          type: 'SAVE_PENDING_CREDENTIAL',
+          payload: {
+            url: window.location.href,
+            hostname,
+            username,
+            password,
+          },
+        });
+      } catch (err) {
+        console.error('[Keeper:cap] Failed to save pending credential:', err);
+      }
+    };
+
+    /**
      * 从表单提取并触发通知展示，自动去重。
      */
-    const processFormCredential = async (form: HTMLFormElement | null): Promise<void> => {
+    const processFormCredential = async (form: HTMLFormElement | null): Promise<void> => {      
       if (!form) {
+        return;
+      }
+
+      // 1. 检查设置是否开启
+      if (!(await isLoginCaptureEnabled())) {
         return;
       }
 
@@ -597,43 +653,61 @@ export default defineContentScript({
         return;
       }
 
+      // 2. 会话级去重
       const sessionKey = `${window.location.href}::${extracted.username.toLowerCase()}`;
       if (capturedSessionKeys.has(sessionKey)) {
+        console.log('[Keeper:cap] Already captured this credential in this session');
         return;
       }
 
-      capturedSessionKeys.add(sessionKey);
-
+      // 3. 检查后端状态
       const status = await checkCredentialStatus(extracted.username, extracted.password);
-      if (status === 'same_password') {
+      
+      if (status === 'same_password' || status === 'not_authenticated' || status === 'different_password') {
+        // 已存在（包括相同密码或不同密码）或已锁定，不处理
         return;
       }
 
-      await showNotificationBar(extracted.username, extracted.password, status === 'different_password');
+      // 4. 新凭据：先保存到后台，再显示通知
+      if (status === 'not_found') {
+        capturedSessionKeys.add(sessionKey);
+        await savePendingToBackground(extracted.username, extracted.password);
+        await showNotificationBar(extracted.username, extracted.password, false);
+      }
     };
 
     /**
      * 无 form 包裹时从整个页面提取凭据并触发通知展示，自动去重。
      */
     const processPageCredential = async (): Promise<void> => {
+      // 1. 检查设置是否开启
+      if (!(await isLoginCaptureEnabled())) {
+        return;
+      }
+
       const extracted = extractCredentialsFromPage();
       if (!extracted) {
         return;
       }
 
+      // 2. 会话级去重
       const sessionKey = `${window.location.href}::${extracted.username.toLowerCase()}`;
       if (capturedSessionKeys.has(sessionKey)) {
         return;
       }
 
-      capturedSessionKeys.add(sessionKey);
-
+      // 3. 检查后端状态
       const status = await checkCredentialStatus(extracted.username, extracted.password);
-      if (status === 'same_password') {
+      if (status === 'same_password' || status === 'not_authenticated' || status === 'different_password') {
         return;
       }
 
-      await showNotificationBar(extracted.username, extracted.password, status === 'different_password');
+      // 4. 新凭据：先保存到后台，再显示通知
+      if (status === 'not_found') {
+        capturedSessionKeys.add(sessionKey);
+        await savePendingToBackground(extracted.username, extracted.password);
+        await showNotificationBar(extracted.username, extracted.password, false);
+      }
     };
 
     /**
@@ -810,6 +884,30 @@ export default defineContentScript({
 
     bindExistingForms();
 
+    // 监听后台消息：恢复待处理的通知栏
+    const onRuntimeMessage = (message: unknown): void => {
+      if (!message || typeof message !== 'object') return;
+
+      const msg = message as Record<string, unknown>;
+
+      if (msg.type === 'SHOW_PENDING_CREDENTIAL') {
+        const payload = msg.payload as {
+          username: string;
+          password: string;
+          originalUrl: string;
+        };
+
+        console.log('[Keeper:cap] Restoring notification bar from background');
+
+        // 页面加载后延迟显示，确保DOM已准备好
+        setTimeout(() => {
+          void showNotificationBar(payload.username, payload.password, false);
+        }, 500);
+      }
+    };
+
+    browser.runtime.onMessage.addListener(onRuntimeMessage);
+
     observer = new MutationObserver((records) => {
       if (observerTimer !== null) {
         window.clearTimeout(observerTimer);
@@ -842,21 +940,6 @@ export default defineContentScript({
       subtree: true,
     });
 
-    const originalFetch = window.fetch;
-    window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-      maybeCaptureFromAjax();
-      return originalFetch.call(window, input, init);
-    };
-
-    const originalXhrSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.send = function (
-      this: XMLHttpRequest,
-      body?: Document | XMLHttpRequestBodyInit | null,
-    ): void {
-      maybeCaptureFromAjax();
-      originalXhrSend.call(this, body);
-    };
-
     ctx.onInvalidated(() => {
       if (dismissActiveBar) {
         dismissActiveBar();
@@ -872,12 +955,11 @@ export default defineContentScript({
         observerTimer = null;
       }
 
+      browser.runtime.onMessage.removeListener(onRuntimeMessage);
+
       for (const cleanup of listenerCleanups) {
         cleanup();
       }
-
-      window.fetch = originalFetch;
-      XMLHttpRequest.prototype.send = originalXhrSend;
     });
   },
 });

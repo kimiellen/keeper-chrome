@@ -3,6 +3,7 @@ import { ref, computed, onMounted, nextTick } from 'vue';
 import { useBookmarksStore } from '../../../stores/bookmarks';
 import { useTagsStore } from '../../../stores/tags';
 import { useRelationsStore } from '../../../stores/relations';
+import { keeperClient } from '../../../api';
 import type { Bookmark, UrlItem, AccountItem } from '../../../api/types';
 import { ElMessage } from 'element-plus';
 import { Search, Plus, Setting, DocumentCopy } from '@element-plus/icons-vue';
@@ -51,7 +52,8 @@ const filteredBookmarks = computed(() => {
           bookmark.name + 
           (bookmark.urls?.[0]?.url || '') +
           (bookmark.notes || '') +
-          (bookmark.pinyinInitials || '')
+          (bookmark.pinyinInitials || '') +
+          (bookmark.pinyinFull || '')
         ).toLowerCase();
         return searchText.includes(keyword.toLowerCase());
       });
@@ -264,7 +266,16 @@ async function copyUsername(bookmark: Bookmark) {
 async function copyPassword(bookmark: Bookmark) {
   if (bookmark.accounts && bookmark.accounts.length > 0) {
     if (bookmark.accounts.length === 1) {
-      await performCopy(bookmark.accounts[0].password, '已复制密码');
+      // 按需解密密码
+      try {
+        const decryptedBookmark = await keeperClient.getBookmark(bookmark.id, true);
+        const account = decryptedBookmark.accounts.find(a => a.id === bookmark.accounts[0].id);
+        if (account) {
+          await performCopy(account.password, '已复制密码');
+        }
+      } catch (error) {
+        ElMessage.error('获取密码失败');
+      }
     } else {
       showAccountSelector(bookmark, bookmark.accounts, 'password');
     }
@@ -283,7 +294,19 @@ async function confirmCopyAccount(account: AccountItem) {
   if (accountCopyType.value === 'username') {
     await performCopy(account.username, '已复制用户名');
   } else {
-    await performCopy(account.password, '已复制密码');
+    // 按需解密密码
+    try {
+      const bookmark = currentAccountBookmark.value;
+      if (bookmark) {
+        const decryptedBookmark = await keeperClient.getBookmark(bookmark.id, true);
+        const decryptedAccount = decryptedBookmark.accounts.find(a => a.id === account.id);
+        if (decryptedAccount) {
+          await performCopy(decryptedAccount.password, '已复制密码');
+        }
+      }
+    } catch (error) {
+      ElMessage.error('获取密码失败');
+    }
   }
   accountDialogVisible.value = false;
 }

@@ -53,8 +53,8 @@ const pwNumbers = ref(settingsStore.passwordGenerator.includeNumbers);
 const pwSpecial = ref(settingsStore.passwordGenerator.includeSpecial);
 const generatedPassword = ref('');
 
-watch([pwLength, pwLowercase, pwUppercase, pwNumbers, pwSpecial], () => {
-  settingsStore.updatePasswordGenerator({
+watch([pwLength, pwLowercase, pwUppercase, pwNumbers, pwSpecial], async () => {
+  await settingsStore.updatePasswordGenerator({
     length: pwLength.value,
     includeLowercase: pwLowercase.value,
     includeUppercase: pwUppercase.value,
@@ -94,8 +94,8 @@ async function copyPassword() {
 const unIncludeNumbers = ref(settingsStore.usernameGenerator.includeNumbers);
 const generatedUsername = ref('');
 
-watch(unIncludeNumbers, (val) => {
-  settingsStore.updateUsernameGenerator({ includeNumbers: val });
+watch(unIncludeNumbers, async (val) => {
+  await settingsStore.updateUsernameGenerator({ includeNumbers: val });
 });
 
 const consonants = 'bcdfghjklmnpqrstvwxyz';
@@ -300,9 +300,9 @@ async function handleDeleteRelation() {
 
 // === 会话设置 ===
 const sessionTimeout = ref(settingsStore.settings.sessionTimeout);
-watch(sessionTimeout, (val) => {
+watch(sessionTimeout, async (val) => {
   if (typeof val === 'number' && val > 0) {
-    settingsStore.setSessionTimeout(val);
+    await settingsStore.setSessionTimeout(val);
   }
 });
 
@@ -326,21 +326,11 @@ async function confirmExport() {
   }
   exportLoading.value = true;
   exportPasswordError.value = '';
-  try {
-    await keeperClient.unlock({ password: exportPassword.value });
-  } catch (e) {
-    if (e instanceof KeeperApiError && e.status === 403) {
-      exportPasswordError.value = '主密码错误';
-    } else {
-      exportPasswordError.value = '验证失败，请重试';
-    }
-    exportLoading.value = false;
-    return;
-  }
 
   try {
-    const response = await keeperClient.exportJson();
-    const blob = await response.blob();
+    const data = await keeperClient.exportJson(exportPassword.value);
+    // 将导出的数据转为 JSON 文件下载
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -350,8 +340,12 @@ async function confirmExport() {
     URL.revokeObjectURL(url);
     exportDialogVisible.value = false;
     ElMessage.success('导出成功');
-  } catch {
-    ElMessage.error('导出失败，请重试');
+  } catch (e) {
+    if (e instanceof KeeperApiError && e.status === 401) {
+      exportPasswordError.value = '主密码错误';
+    } else {
+      ElMessage.error('导出失败，请重试');
+    }
   } finally {
     exportLoading.value = false;
   }
@@ -392,33 +386,24 @@ async function confirmImport() {
   importPasswordError.value = '';
 
   try {
-    await keeperClient.unlock({ password: importPassword.value });
-  } catch (e) {
-    if (e instanceof KeeperApiError && e.status === 403) {
-      importPasswordError.value = '主密码错误';
-    } else {
-      importPasswordError.value = '验证失败，请重试';
-    }
-    importLoading.value = false;
-    return;
-  }
-
-  try {
     const result = await keeperClient.importKeeperJson(
+      importPassword.value,
       pendingImportContent.value,
       importConflictPolicy.value
     );
     importDialogVisible.value = false;
-    const { imported, skipped, warnings } = result;
+    const { success, imported, errors } = result;
     let msg = `导入完成：书签 ${imported.bookmarks} 条，标签 ${imported.tags} 个`;
     if (imported.relations > 0) msg += `，关联 ${imported.relations} 个`;
-    if (skipped.bookmarks > 0) msg += `，跳过 ${skipped.bookmarks} 条`;
     ElMessage.success(msg);
-    if (warnings.length > 0) {
-      ElMessage.warning(warnings[0]);
+    if (errors.length > 0) {
+      // 显示第一条错误信息
+      ElMessage.warning(`导入过程中有 ${errors.length} 个错误: ${errors[0]}`);
     }
   } catch (e) {
-    if (e instanceof KeeperApiError) {
+    if (e instanceof KeeperApiError && e.status === 401) {
+      importPasswordError.value = '主密码错误';
+    } else if (e instanceof KeeperApiError) {
       ElMessage.error(e.detail || '导入失败');
     } else {
       ElMessage.error('导入失败，请重试');
@@ -591,6 +576,29 @@ async function confirmImport() {
             <span class="label-text">会话超时 (分钟):</span>
             <el-input-number v-model="sessionTimeout" :min="1" :max="1440" :step="1" size="small" />
           </div>
+          <div class="config-item switch-item">
+            <span class="label-text">隐藏时锁定:</span>
+            <el-switch
+              v-model="settingsStore.settings.lockOnHide"
+              @change="async (val: boolean) => await settingsStore.setLockOnHide(val)"
+            />
+          </div>
+          <p class="setting-hint">关闭后，隐藏侧边栏不会锁定会话，下次打开无需重新解锁</p>
+        </div>
+      </section>
+
+      <!-- 登录捕获设置 -->
+      <section class="setting-section">
+        <h3 class="section-title">登录捕获</h3>
+        <div class="session-config">
+          <div class="config-item switch-item">
+            <span class="label-text">捕获新登录提示保存:</span>
+            <el-switch
+              v-model="settingsStore.settings.enableLoginCapture"
+              @change="async (val: boolean) => await settingsStore.setEnableLoginCapture(val)"
+            />
+          </div>
+          <p class="setting-hint">开启后，在网站登录时会弹出通知栏提示保存新账号到 Keeper</p>
         </div>
       </section>
 
@@ -638,7 +646,6 @@ async function confirmImport() {
           <el-option label="手机" value="phone" />
           <el-option label="邮箱" value="email" />
           <el-option label="身份证" value="idcard" />
-          <el-option label="社交账号" value="social" />
           <el-option label="其他" value="other" />
         </el-select>
       </div>
@@ -824,6 +831,17 @@ async function confirmImport() {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.config-item.switch-item {
+  justify-content: space-between;
+}
+
+.setting-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin: 0;
+  line-height: 1.5;
 }
 
 .full-width-select {

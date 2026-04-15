@@ -18,7 +18,7 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
   
   // 当前查询参数
   const currentParams = ref<BookmarkListParams>({
-    limit: 50,
+    limit: 5000,  // 一次性加载全部（足够覆盖用户数据量）
     offset: 0,
     sort: '-lastUsedAt',
   });
@@ -71,13 +71,6 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
 
   /** 获取书签列表 */
   async function fetchBookmarks(params?: Partial<BookmarkListParams>): Promise<void> {
-    const authStore = useAuthStore();
-    
-    if (authStore.locked) {
-      error.value = '请先解锁';
-      return;
-    }
-
     loading.value = true;
     error.value = null;
     
@@ -86,12 +79,25 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     currentParams.value = queryParams;
 
     try {
+      console.log('[Keeper:store] fetching bookmarks...');
       const response = await keeperClient.getBookmarks(queryParams);
+      console.log('[Keeper:store] got bookmarks:', response.data.length);
+      // DEBUG: 验证密码是否为加密格式
+      if (response.data.length > 0 && response.data[0].accounts.length > 0) {
+        const pwd = response.data[0].accounts[0].password;
+        console.log('[Keeper:DEBUG] First account password:', pwd.substring(0, 20) + '...');
+        console.log('[Keeper:DEBUG] Is encrypted:', pwd.startsWith('v1.'));
+      }
       bookmarks.value = response.data;
       total.value = response.total;
     } catch (e) {
       if (e instanceof KeeperApiError) {
         error.value = e.detail;
+        // 401 时自动锁定
+        if (e.status === 401) {
+          const authStore = useAuthStore();
+          authStore.lock();
+        }
       } else {
         error.value = '获取书签列表失败';
       }
@@ -320,8 +326,12 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     browser.storage.onChanged.addListener((changes, area) => {
       console.log('[Keeper:store] storage.onChanged fired', area, Object.keys(changes));
       if (area === 'local' && changes.bookmarkChangedAt) {
-        console.log('[Keeper:store] bookmarkChangedAt changed, fetching bookmarks');
-        void fetchBookmarks();
+        // 只有未锁定时才自动获取
+        const authStore = useAuthStore();
+        if (!authStore.locked) {
+          console.log('[Keeper:store] bookmarkChangedAt changed, fetching bookmarks');
+          void fetchBookmarks();
+        }
       }
     });
   }
