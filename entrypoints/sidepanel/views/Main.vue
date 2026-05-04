@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import { useBookmarksStore } from '../../../stores/bookmarks';
 import { useTagsStore } from '../../../stores/tags';
 import { useRelationsStore } from '../../../stores/relations';
@@ -326,6 +326,14 @@ function addBookmark() {
   emit('edit', null);
 }
 
+function handleClickOutside(e: MouseEvent) { 
+  const target = e.target as HTMLElement;
+    if (target.closest('input, button, a, [role="button"], [tabindex], .el-input, .el-button, .el-select, .el-dialog')) {
+      return;
+    }
+    searchInput.value?.focus();
+}
+
 onMounted(async () => {
   bookmarksStore.startListening();
   await Promise.all([
@@ -334,14 +342,12 @@ onMounted(async () => {
     relationsStore.fetchRelations()
   ]);
   searchInput.value?.focus();
-  window.addEventListener('click', (e) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('input, button, a, [role="button"], [tabindex], .el-input, .el-button, .el-select, .el-dialog')) {
-      return;
-    }
-    searchInput.value?.focus();
-  });
+  window.addEventListener('click', handleClickOutside);
 });
+
+onUnmounted(() => {
+  window.removeEventListener('click', handleClickOutside);
+})
 </script>
 
 <template>

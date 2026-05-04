@@ -172,7 +172,7 @@ async function handleGetMatchingBookmarks(
   try {
     const pageUrl = sender?.tab?.url ?? payload.url;
     console.log('[Keeper:bg] handleGetMatchingBookmarks called for URL:', pageUrl);
-    const bookmarksResult = await keeperClient.getBookmarks({ limit: 100 });
+    const bookmarksResult = await keeperClient.getBookmarks({ limit: 5000 });
     console.log('[Keeper:bg] got bookmarks:', bookmarksResult.data.length);
     const matched = bookmarksResult.data.filter((bookmark) =>
       isBookmarkMatchingHostname(bookmark, pageUrl),
@@ -239,7 +239,7 @@ async function handleSaveCredentials(
   try {
     const pageHostname = getHostname(payload.url);
 
-    const bookmarksResult = await keeperClient.getBookmarks({ limit: 100 });
+    const bookmarksResult = await keeperClient.getBookmarks({ limit: 5000 });
     const existingBookmark = bookmarksResult.data.find((bookmark) =>
       isBookmarkMatchingHostname(bookmark, payload.url),
     );
@@ -318,20 +318,6 @@ export default defineBackground({
     console.log('[Keeper:bg] Token loaded, token exists:', keeperClient.getToken() !== null);
 
     chrome.commands.onCommand.addListener(async (command) => {
-      if (command === 'toggle_sidebar') {
-        try {
-          const currentWindow = await chrome.windows.getCurrent();
-          if (currentWindow.id) {
-            await chrome.sidePanel.open({ windowId: currentWindow.id });
-          }
-        } catch {
-          // 忽略错误
-        }
-
-        // 根据设置决定是否锁定（这里简化处理：重新打开时不自动锁定）
-        return;
-      }
-
       if (command !== 'fill_credentials') {
         return;
       }

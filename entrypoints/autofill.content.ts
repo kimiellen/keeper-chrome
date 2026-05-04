@@ -513,6 +513,14 @@ export default defineContentScript({
       });
     }
 
+    function showNotification(message: string): void {
+      if (window.Notification && Notification.permission === "granted") {
+        new Notification("Keeper", { body: message });
+      } else {
+        alert(message);
+      }
+    }
+
     function showAccountDropdown(anchorField: HTMLInputElement, choices: AccountChoice[], isTwoStep: boolean = false): void {
       closeAccountDropdown();
 

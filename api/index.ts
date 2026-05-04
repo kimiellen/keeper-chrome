@@ -40,7 +40,6 @@ export type {
   ImportPreviewResponse,
   ImportConflict,
   ImportCounts,
-  ImportSkipped,
   HealthResponse,
   DatabaseInfo,
   DatabaseListResponse,

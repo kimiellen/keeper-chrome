@@ -311,7 +311,7 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     loading.value = false;
     error.value = null;
     currentParams.value = {
-      limit: 50,
+      limit: 5000,
       offset: 0,
       sort: '-lastUsedAt',
     };

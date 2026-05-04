@@ -26,11 +26,11 @@ export default defineConfig({
       default_path: 'sidepanel.html',
     },
     commands: {
-      toggle_sidebar: {
+      _execute_action: {
         suggested_key: {
           default: 'Alt+Period',
         },
-        description: '切换 Keeper 侧边栏',
+        description: '激活 Keeper 扩展',
       },
       fill_credentials: {
         suggested_key: {
